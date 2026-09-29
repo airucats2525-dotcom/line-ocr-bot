@@ -1,7 +1,7 @@
 import os
 import cv2
 import pytesseract
-import tesseract
+import pytesseract_binary  # 自動的にTesseractの実行パスを通します
 import numpy as np
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -15,9 +15,6 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
-# pytesseractに同梱されたtesseract実行ファイルのパスを指定
-pytesseract.pytesseract.tesseract_cmd = tesseract.tesseract_cmd
 
 # 座標設定 (Y1, Y2, X1, X2)
 CROP_MACHINE_ID = (2605, 2662, 262, 480) # 台番号
