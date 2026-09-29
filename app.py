@@ -1,6 +1,6 @@
 import os
 import cv2
-import easyocr
+import pytesseract
 import numpy as np
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -9,15 +9,11 @@ from linebot.models import MessageEvent, ImageMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# 環境変数からLINEの鍵を取得
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
-# OCRモデルの初期化（英語・数字）
-reader = easyocr.Reader(['en'])
 
 # 座標設定 (Y1, Y2, X1, X2)
 CROP_MACHINE_ID = (2605, 2662, 262, 480) # 台番号
@@ -28,10 +24,15 @@ CROP_TOTAL_START = (855, 1000, 436, 750) # 通常中スタート
 def extract_number(img_np, crop_coords):
     y1, y2, x1, x2 = crop_coords
     cropped = img_np[y1:y2, x1:x2]
+    
     gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-    results = reader.readtext(gray, detail=0, allowlist='0123456789')
-    if results:
-        return int(results[0])
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+    
+    config = "--psm 6 -c tessedit_char_whitelist=0123456789"
+    text = pytesseract.image_to_string(thresh, config=config).strip()
+    
+    if text.isdigit():
+        return int(text)
     return 0
 
 @app.route("/callback", methods=['POST'])
