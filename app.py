@@ -1,7 +1,6 @@
 import os
 import cv2
 import numpy as np
-from paddleocr import PaddleOCR
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -15,8 +14,15 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# PaddleOCR初期化（英数モード）
-ocr = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
+# グローバルではPaddleOCRを初期化しない（起動速度優先）
+ocr_instance = None
+
+def get_ocr():
+    global ocr_instance
+    if ocr_instance is None:
+        from paddleocr import PaddleOCR
+        ocr_instance = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
+    return ocr_instance
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -35,14 +41,15 @@ def handle_image(event):
         img_bytes = message_content.content
         img_np = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
         
-        # 1. 画像の前処理（クッキリさせる）
+        # 1. 画像の前処理（グレースケール＋反転2値化）
         gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
-        # 反転して白背景・黒文字化（OCRが最も得意な形式）
         _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
-        # 3チャンネルカラーに戻す (PaddleOCRの入力用)
         processed_img = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
 
-        # 2. OCR実行（元画像と前処理画像の2パターンでアタック）
+        # 2. OCRオブジェクトを取得（必要な時だけ初期化）
+        ocr = get_ocr()
+
+        # 3. OCR実行
         result = ocr.ocr(img_np, cls=False)
         if not result or not result[0]:
             result = ocr.ocr(processed_img, cls=False)
@@ -55,7 +62,6 @@ def handle_image(event):
                     detected_words.append(text)
 
         if detected_words:
-            # 読み取れたテキストの上位20個を表示
             word_list_str = "\n".join(detected_words[:20])
             res_text = f"【読み取りテスト成功】\n検出された文字・数字:\n{word_list_str}"
         else:
