@@ -15,7 +15,7 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# PaddleOCR初期化
+# PaddleOCR初期化（英数モード）
 ocr = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
 
 @app.route("/callback", methods=['POST'])
@@ -35,29 +35,35 @@ def handle_image(event):
         img_bytes = message_content.content
         img_np = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
         
-        # 画像全体のサイズを取得して記録
-        h, w, _ = img_np.shape
-        print(f"受信した画像のサイズ: 横={w}px, 縦={h}px")
-        
-        # 画像全体から文字列を検出
+        # 1. 画像の前処理（クッキリさせる）
+        gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
+        # 反転して白背景・黒文字化（OCRが最も得意な形式）
+        _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+        # 3チャンネルカラーに戻す (PaddleOCRの入力用)
+        processed_img = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+
+        # 2. OCR実行（元画像と前処理画像の2パターンでアタック）
         result = ocr.ocr(img_np, cls=False)
-        detected_texts = []
+        if not result or not result[0]:
+            result = ocr.ocr(processed_img, cls=False)
+
+        detected_words = []
         if result and result[0]:
             for line in result[0]:
-                text = line[1][0]
-                detected_texts.append(text)
-        
-        sample_str = ", ".join(detected_texts[:10]) if detected_texts else "文字が見つかりませんでした"
-        
-        res_text = (
-            f"【画像受信成功】\n"
-            f"解像度: {w} x {h}\n"
-            f"検出文字列（先頭一部）:\n{sample_str}\n\n"
-            f"※全画面認識モードでテスト中"
-        )
+                text = line[1][0].strip()
+                if text:
+                    detected_words.append(text)
+
+        if detected_words:
+            # 読み取れたテキストの上位20個を表示
+            word_list_str = "\n".join(detected_words[:20])
+            res_text = f"【読み取りテスト成功】\n検出された文字・数字:\n{word_list_str}"
+        else:
+            res_text = "【読み取り失敗】\n画像から文字が認識できませんでした。"
+
     except Exception as e:
-        res_text = f"処理エラー:\n{e}"
-    
+        res_text = f"処理エラーが発生しました:\n{e}"
+
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=res_text)
