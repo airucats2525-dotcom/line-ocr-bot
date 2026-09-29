@@ -1,8 +1,8 @@
 import os
 import cv2
-import pytesseract
-import pytesseract_binary  # 自動的にTesseractの実行パスを通します
 import numpy as np
+from PIL import Image
+import pyocr
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -23,24 +23,34 @@ CROP_REG = (664, 841, 436, 694)         # RB
 CROP_TOTAL_START = (855, 1000, 436, 750) # 通常中スタート
 
 def extract_number(img_np, crop_coords):
-    y1, y2, x1, x2 = crop_coords
-    h, w, _ = img_np.shape
-    y1, y2 = min(y1, h), min(y2, h)
-    x1, x2 = min(x1, w), min(x2, w)
-    
-    cropped = img_np[y1:y2, x1:x2]
-    if cropped.size == 0:
-        return 0
+    try:
+        y1, y2, x1, x2 = crop_coords
+        h, w, _ = img_np.shape
+        y1, y2 = min(y1, h), min(y2, h)
+        x1, x2 = min(x1, w), min(x2, w)
         
-    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-    
-    config = "--psm 6 -c tessedit_char_whitelist=0123456789"
-    text = pytesseract.image_to_string(thresh, config=config).strip()
-    
-    if text.isdigit():
-        return int(text)
-    return 0
+        cropped = img_np[y1:y2, x1:x2]
+        if cropped.size == 0:
+            return 0
+            
+        gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        
+        # PIL Imageに変換してOCR実行
+        pil_img = Image.fromarray(thresh)
+        tools = pyocr.get_available_tools()
+        if len(tools) == 0:
+            return 0
+        
+        text = tools[0].image_to_string(
+            pil_img,
+            builder=pyocr.builders.DigitsBuilder()
+        )
+        
+        digits = "".join(filter(str.isdigit, text))
+        return int(digits) if digits else 0
+    except Exception:
+        return 0
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -77,8 +87,7 @@ def handle_image(event):
             f"合算確率: 1/{probability}"
         )
     except Exception as e:
-        print(f"Error during OCR processing: {e}")
-        res_text = f"処理中にエラーが発生しました:\n{e}"
+        res_text = f"読み取り処理エラー:\n{e}"
     
     line_bot_api.reply_message(
         event.reply_token,
