@@ -1,8 +1,7 @@
 import os
 import cv2
 import numpy as np
-from PIL import Image
-import pyocr
+from paddleocr import PaddleOCR
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -16,41 +15,8 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# 座標設定 (Y1, Y2, X1, X2)
-CROP_MACHINE_ID = (2605, 2662, 262, 480) # 台番号
-CROP_BIG = (667, 1042, 21, 429)         # BB
-CROP_REG = (664, 841, 436, 694)         # RB
-CROP_TOTAL_START = (855, 1000, 436, 750) # 通常中スタート
-
-def extract_number(img_np, crop_coords):
-    try:
-        y1, y2, x1, x2 = crop_coords
-        h, w, _ = img_np.shape
-        y1, y2 = min(y1, h), min(y2, h)
-        x1, x2 = min(x1, w), min(x2, w)
-        
-        cropped = img_np[y1:y2, x1:x2]
-        if cropped.size == 0:
-            return 0
-            
-        gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-        
-        # PIL Imageに変換してOCR実行
-        pil_img = Image.fromarray(thresh)
-        tools = pyocr.get_available_tools()
-        if len(tools) == 0:
-            return 0
-        
-        text = tools[0].image_to_string(
-            pil_img,
-            builder=pyocr.builders.DigitsBuilder()
-        )
-        
-        digits = "".join(filter(str.isdigit, text))
-        return int(digits) if digits else 0
-    except Exception:
-        return 0
+# PaddleOCR初期化
+ocr = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -69,25 +35,28 @@ def handle_image(event):
         img_bytes = message_content.content
         img_np = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
         
-        machine_id = extract_number(img_np, CROP_MACHINE_ID)
-        big = extract_number(img_np, CROP_BIG)
-        reg = extract_number(img_np, CROP_REG)
-        total_start = extract_number(img_np, CROP_TOTAL_START)
+        # 画像全体のサイズを取得して記録
+        h, w, _ = img_np.shape
+        print(f"受信した画像のサイズ: 横={w}px, 縦={h}px")
         
-        total_bonus = big + reg
-        probability = round(total_start / total_bonus, 1) if total_bonus > 0 else 0
+        # 画像全体から文字列を検出
+        result = ocr.ocr(img_np, cls=False)
+        detected_texts = []
+        if result and result[0]:
+            for line in result[0]:
+                text = line[1][0]
+                detected_texts.append(text)
+        
+        sample_str = ", ".join(detected_texts[:10]) if detected_texts else "文字が見つかりませんでした"
         
         res_text = (
-            f"【読み取り結果】\n"
-            f"台番号: {machine_id}\n"
-            f"BB: {big} 回\n"
-            f"RB: {reg} 回\n"
-            f"合算回数: {total_bonus} 回\n"
-            f"通常中スタート: {total_start} G\n"
-            f"合算確率: 1/{probability}"
+            f"【画像受信成功】\n"
+            f"解像度: {w} x {h}\n"
+            f"検出文字列（先頭一部）:\n{sample_str}\n\n"
+            f"※全画面認識モードでテスト中"
         )
     except Exception as e:
-        res_text = f"読み取り処理エラー:\n{e}"
+        res_text = f"処理エラー:\n{e}"
     
     line_bot_api.reply_message(
         event.reply_token,
