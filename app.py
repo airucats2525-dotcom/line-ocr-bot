@@ -14,15 +14,32 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# グローバルではPaddleOCRを初期化しない（起動速度優先）
-ocr_instance = None
+# 1268 x 2756 解像度用切り抜き座標 (Y1, Y2, X1, X2)
+CROP_MACHINE_ID = (2605, 2662, 262, 480)  # 台番号
+CROP_BIG = (667, 1042, 21, 429)          # BB
+CROP_REG = (664, 841, 436, 694)          # RB
+CROP_TOTAL_START = (855, 1000, 436, 750) # 通常中スタート
 
-def get_ocr():
-    global ocr_instance
-    if ocr_instance is None:
-        from paddleocr import PaddleOCR
-        ocr_instance = PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
-    return ocr_instance
+def extract_number_from_crop(img_np, crop_coords):
+    """輪郭判定による超軽量な数字領域抽出処理"""
+    y1, y2, x1, x2 = crop_coords
+    h, w, _ = img_np.shape
+    y1, y2 = min(y1, h), min(y2, h)
+    x1, x2 = min(x1, w), min(x2, w)
+    
+    cropped = img_np[y1:y2, x1:x2]
+    if cropped.size == 0:
+        return 0
+        
+    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+    
+    # 輪郭の数をカウントして文字存在を判定
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # 簡易検出（数字の領域が存在するか）
+    valid_contours = [c for c in contours if cv2.boundingRect(c)[3] > 10]
+    return len(valid_contours)
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -41,35 +58,24 @@ def handle_image(event):
         img_bytes = message_content.content
         img_np = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
         
-        # 1. 画像の前処理（グレースケール＋反転2値化）
-        gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
-        processed_img = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-
-        # 2. OCRオブジェクトを取得（必要な時だけ初期化）
-        ocr = get_ocr()
-
-        # 3. OCR実行
-        result = ocr.ocr(img_np, cls=False)
-        if not result or not result[0]:
-            result = ocr.ocr(processed_img, cls=False)
-
-        detected_words = []
-        if result and result[0]:
-            for line in result[0]:
-                text = line[1][0].strip()
-                if text:
-                    detected_words.append(text)
-
-        if detected_words:
-            word_list_str = "\n".join(detected_words[:20])
-            res_text = f"【読み取りテスト成功】\n検出された文字・数字:\n{word_list_str}"
-        else:
-            res_text = "【読み取り失敗】\n画像から文字が認識できませんでした。"
-
+        # 切り抜き領域のテスト
+        cnt_machine = extract_number_from_crop(img_np, CROP_MACHINE_ID)
+        cnt_big = extract_number_from_crop(img_np, CROP_BIG)
+        cnt_reg = extract_number_from_crop(img_np, CROP_REG)
+        cnt_start = extract_number_from_crop(img_np, CROP_TOTAL_START)
+        
+        res_text = (
+            f"【超軽量解析テスト】\n"
+            f"画像受信: 成功\n"
+            f"台番号領域要素数: {cnt_machine}\n"
+            f"BB領域要素数: {cnt_big}\n"
+            f"RB領域要素数: {cnt_reg}\n"
+            f"スタート領域要素数: {cnt_start}\n\n"
+            f"※メモリ制限を回避して正常動作中"
+        )
     except Exception as e:
-        res_text = f"処理エラーが発生しました:\n{e}"
-
+        res_text = f"処理エラー:\n{e}"
+    
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=res_text)
