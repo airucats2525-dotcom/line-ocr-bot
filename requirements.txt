@@ -3,3 +3,4 @@ line-bot-sdk
 easyocr
 opencv-python-headless
 numpy
+gunicorn
