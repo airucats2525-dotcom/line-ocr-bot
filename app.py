@@ -23,8 +23,15 @@ CROP_TOTAL_START = (855, 1000, 436, 750) # 通常中スタート
 
 def extract_number(img_np, crop_coords):
     y1, y2, x1, x2 = crop_coords
-    cropped = img_np[y1:y2, x1:x2]
+    # 画像のサイズに合わせて切り抜き範囲を調整
+    h, w, _ = img_np.shape
+    y1, y2 = min(y1, h), min(y2, h)
+    x1, x2 = min(x1, w), min(x2, w)
     
+    cropped = img_np[y1:y2, x1:x2]
+    if cropped.size == 0:
+        return 0
+        
     gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
     
@@ -47,27 +54,31 @@ def callback():
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
-    message_content = line_bot_api.get_message_content(event.message.id)
-    img_bytes = message_content.content
-    img_np = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-    
-    machine_id = extract_number(img_np, CROP_MACHINE_ID)
-    big = extract_number(img_np, CROP_BIG)
-    reg = extract_number(img_np, CROP_REG)
-    total_start = extract_number(img_np, CROP_TOTAL_START)
-    
-    total_bonus = big + reg
-    probability = round(total_start / total_bonus, 1) if total_bonus > 0 else 0
-    
-    res_text = (
-        f"【読み取り結果】\n"
-        f"台番号: {machine_id}\n"
-        f"BB: {big} 回\n"
-        f"RB: {reg} 回\n"
-        f"合算回数: {total_bonus} 回\n"
-        f"通常中スタート: {total_start} G\n"
-        f"合算確率: 1/{probability}"
-    )
+    try:
+        message_content = line_bot_api.get_message_content(event.message.id)
+        img_bytes = message_content.content
+        img_np = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+        
+        machine_id = extract_number(img_np, CROP_MACHINE_ID)
+        big = extract_number(img_np, CROP_BIG)
+        reg = extract_number(img_np, CROP_REG)
+        total_start = extract_number(img_np, CROP_TOTAL_START)
+        
+        total_bonus = big + reg
+        probability = round(total_start / total_bonus, 1) if total_bonus > 0 else 0
+        
+        res_text = (
+            f"【読み取り結果】\n"
+            f"台番号: {machine_id}\n"
+            f"BB: {big} 回\n"
+            f"RB: {reg} 回\n"
+            f"合算回数: {total_bonus} 回\n"
+            f"通常中スタート: {total_start} G\n"
+            f"合算確率: 1/{probability}"
+        )
+    except Exception as e:
+        print(f"Error during OCR processing: {e}")
+        res_text = f"処理中にエラーが発生しました:\n{e}"
     
     line_bot_api.reply_message(
         event.reply_token,
