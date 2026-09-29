@@ -1,6 +1,7 @@
 import os
 import cv2
 import pytesseract
+import tesseract
 import numpy as np
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -15,6 +16,9 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
+# pytesseractに同梱されたtesseract実行ファイルのパスを指定
+pytesseract.pytesseract.tesseract_cmd = tesseract.tesseract_cmd
+
 # 座標設定 (Y1, Y2, X1, X2)
 CROP_MACHINE_ID = (2605, 2662, 262, 480) # 台番号
 CROP_BIG = (667, 1042, 21, 429)         # BB
@@ -23,7 +27,6 @@ CROP_TOTAL_START = (855, 1000, 436, 750) # 通常中スタート
 
 def extract_number(img_np, crop_coords):
     y1, y2, x1, x2 = crop_coords
-    # 画像のサイズに合わせて切り抜き範囲を調整
     h, w, _ = img_np.shape
     y1, y2 = min(y1, h), min(y2, h)
     x1, x2 = min(x1, w), min(x2, w)
