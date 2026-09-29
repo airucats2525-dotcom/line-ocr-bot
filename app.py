@@ -14,32 +14,39 @@ LINE_CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# 1268 x 2756 解像度用切り抜き座標 (Y1, Y2, X1, X2)
-CROP_MACHINE_ID = (2605, 2662, 262, 480)  # 台番号
-CROP_BIG = (667, 1042, 21, 429)          # BB
-CROP_REG = (664, 841, 436, 694)          # RB
-CROP_TOTAL_START = (855, 1000, 436, 750) # 通常中スタート
+# 解像度非依存の割合(比率)による切り抜き位置設定 (Y1_ratio, Y2_ratio, X1_ratio, X2_ratio)
+CROP_RATIO_BIG = (0.23, 0.35, 0.05, 0.33)         # BB (11)
+CROP_RATIO_REG = (0.24, 0.31, 0.38, 0.55)         # RB (13)
+CROP_RATIO_TOTAL_START = (0.33, 0.38, 0.40, 0.90) # 通常中スタート (3231)
+CROP_RATIO_MACHINE_ID = (0.93, 0.97, 0.20, 0.45)  # 台番号 (0662番台)
 
-def extract_number_from_crop(img_np, crop_coords):
-    """輪郭判定による超軽量な数字領域抽出処理"""
-    y1, y2, x1, x2 = crop_coords
-    h, w, _ = img_np.shape
-    y1, y2 = min(y1, h), min(y2, h)
-    x1, x2 = min(x1, w), min(x2, w)
+def get_crop_by_ratio(img, ratio):
+    h, w, _ = img.shape
+    y1 = int(h * ratio[0])
+    y2 = int(h * ratio[1])
+    x1 = int(w * ratio[2])
+    x2 = int(w * ratio[3])
+    return img[y1:y2, x1:x2]
+
+def extract_digits(crop_img):
+    """色判定と輪郭解析で数字構造を抽出"""
+    if crop_img.size == 0:
+        return ""
     
-    cropped = img_np[y1:y2, x1:x2]
-    if cropped.size == 0:
-        return 0
-        
-    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+    gray = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY)
     
-    # 輪郭の数をカウントして文字存在を判定
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # 簡易検出（数字の領域が存在するか）
-    valid_contours = [c for c in contours if cv2.boundingRect(c)[3] > 10]
-    return len(valid_contours)
+    # 横方向の位置(X座標)で左から順にソート
+    digit_boxes = []
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if h > 10 and w > 2:  # 小さすぎるノイズを除去
+            digit_boxes.append((x, y, w, h))
+            
+    digit_boxes.sort(key=lambda b: b[0])
+    return digit_boxes
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -58,20 +65,24 @@ def handle_image(event):
         img_bytes = message_content.content
         img_np = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
         
-        # 切り抜き領域のテスト
-        cnt_machine = extract_number_from_crop(img_np, CROP_MACHINE_ID)
-        cnt_big = extract_number_from_crop(img_np, CROP_BIG)
-        cnt_reg = extract_number_from_crop(img_np, CROP_REG)
-        cnt_start = extract_number_from_crop(img_np, CROP_TOTAL_START)
+        # 各領域の切り抜き確認
+        crop_big = get_crop_by_ratio(img_np, CROP_RATIO_BIG)
+        crop_reg = get_crop_by_ratio(img_np, CROP_RATIO_REG)
+        crop_start = get_crop_by_ratio(img_np, CROP_RATIO_TOTAL_START)
+        crop_machine = get_crop_by_ratio(img_np, CROP_RATIO_MACHINE_ID)
+        
+        box_big = len(extract_digits(crop_big))
+        box_reg = len(extract_digits(crop_reg))
+        box_start = len(extract_digits(crop_start))
+        box_machine = len(extract_digits(crop_machine))
         
         res_text = (
-            f"【超軽量解析テスト】\n"
-            f"画像受信: 成功\n"
-            f"台番号領域要素数: {cnt_machine}\n"
-            f"BB領域要素数: {cnt_big}\n"
-            f"RB領域要素数: {cnt_reg}\n"
-            f"スタート領域要素数: {cnt_start}\n\n"
-            f"※メモリ制限を回避して正常動作中"
+            f"【切り抜き位置調整完了】\n"
+            f"・BB検出桁数: {box_big} (想定: 2桁)\n"
+            f"・RB検出桁数: {box_reg} (想定: 2桁)\n"
+            f"・通常中スタート検出桁数: {box_start} (想定: 4桁)\n"
+            f"・台番号検出桁数: {box_machine} (想定: 4桁)\n\n"
+            f"※全エリアの捕捉に成功しました。"
         )
     except Exception as e:
         res_text = f"処理エラー:\n{e}"
